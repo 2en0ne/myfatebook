@@ -1,5 +1,7 @@
 # [Fatebook](https://fatebook.io)
 
+[English](./README.md) | [中文](./README.zh-CN.md)
+
 The fastest way to make and track predictions.
 
 This repo includes [fatebook.io](https://fatebook.io), [Fatebook for Slack](fatebook.io/for-slack) and [Fatebook for Chrome](https://fatebook.io/extension).
