@@ -22,6 +22,7 @@ knowledge/
 ## Key Documents
 
 - **planning.md**: Strategic direction and phase-based goals. Answers "what should we do next?"
+- **architecture.md**: System architecture overview, data model, API structure
 - **patterns/**: Reusable code solutions
 - **decisions/**: Architecture decision records (ADRs)
 

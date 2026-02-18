@@ -54,7 +54,39 @@ This file provides context for AI agents operating in the Fatebook codebase.
 // ... commit message suggestions here ...
 ```
 
-### 6. Strategic Planning Reference
+### 6. Progress Tracking with progress.txt
+
+- Create `progress.txt` in project root to prevent context rot
+- Record completed work state and lessons learned after each session
+- **Write to file on each iteration**, read at start of new context
+- Format: timestamp, completed tasks, key decisions, lessons learned, next steps
+
+```markdown
+# Progress Record
+
+## Session: [Date/Time]
+
+### Completed
+
+- [Task 1]
+- [Task 2]
+
+### Key Decisions
+
+- Decision: [What was decided]
+- Rationale: [Why]
+
+### Lessons Learned
+
+- [Lesson 1]
+- [Lesson 2]
+
+### Next Steps
+
+- [Next task]
+```
+
+### 7. Strategic Planning Reference
 
 - Engineering knowledge is stored in `knowledge/` directory
 - Strategic planning document is in `knowledge/planning.md` - answers "what should we do next?" based on project goals and current state
@@ -62,6 +94,289 @@ This file provides context for AI agents operating in the Fatebook codebase.
 - **knowledge/planning.md**: strategic phase planning for project direction
 
 When asked "what should we do next based on current strategic planning?", consult the planning document and provide actionable options with reasoning.
+
+### 8. Docker Sandbox Isolation (Running OpenCode)
+
+Running OpenCode inside a Docker container is a critical security measure. It prevents AI from accidentally deleting host files or executing dangerous commands during automated iterations.
+
+#### Why This Matters
+
+- **Host Protection**: Isolates AI operations from the host filesystem
+- **Damage Control**: Even if AI goes rogue, it only affects the container
+- **Clean Environment**: Each task starts with a fresh, predictable environment
+
+#### Docker Configuration
+
+Create `docker-compose.yml` in project root:
+
+```yaml
+services:
+  opencode-sandbox:
+    image: node:18-bullseye
+    volumes:
+      - .:/workspace
+    working_dir: /workspace
+    user: node
+    command: tail -f /dev/null
+```
+
+#### Security Best Practices
+
+| Setting   | Recommendation                  | Purpose                     |
+| --------- | ------------------------------- | --------------------------- |
+| User      | Run as non-root (`user: node`)  | Limit container privileges  |
+| Read-only | Use `:ro` for sensitive dirs    | Prevent accidental writes   |
+| Network   | `network_mode: none` if offline | Prevent data exfiltration   |
+| Resources | `--memory=2g --cpus=1.5`        | Prevent resource exhaustion |
+
+#### Verification
+
+```bash
+# Confirm running inside container
+ls /.dockerenv
+
+# Check current user
+whoami
+```
+
+#### Alternative: OrbStack
+
+If using OrbStack (macOS), configure Docker sandbox through its settings for easier management.
+
+---
+
+### 9. Parallel Development with Worktrees
+
+Single-threaded AI coding cannot meet demands for parallel feature development. Use Git worktrees to create isolated "containers within containers" - each worktree runs a dedicated OpenCode instance for independent, parallel development.
+
+#### Core Principles
+
+- **Isolated Execution**: Each worktree operates independently with its own branch, port, and database
+- **Parallel Progress**: Multiple features can be developed simultaneously without interference
+- **Sequential Integration**: Features merge one-by-one to main after passing tests and rebasing
+
+#### Worktree Setup for Parallel Development
+
+```bash
+# Create worktree with dedicated branch
+git worktree add -b task/xxx ../fatebook-worktrees/task-xxx
+
+# Create isolated data directory
+mkdir -p ../fatebook-worktrees/task-xxx/data
+
+# Symlink shared configuration (NOT progress.txt - each worktree has its own)
+ln -s ../../fatebook/data/dev-tasks.json ../fatebook-worktrees/task-xxx/data/
+ln -s ../../fatebook/api-key.json ../fatebook-worktrees/task-xxx/data/
+
+# Symlink node_modules for faster startup
+ln -s ../fatebook/node_modules ../fatebook-worktrees/task-xxx/
+
+# Dedicated port: base 3005 + task_index
+# task-001 → 3005, task-002 → 3006, etc.
+```
+
+#### Conflict Resolution Principles
+
+When multiple worktrees modify the same files, conflicts are inevitable. Follow these principles:
+
+##### Rebase Failure Handling
+
+```
+If "unstaged changes" error:
+  → Commit or stash current changes first
+
+If merge conflicts:
+  1. View conflicting files: git status
+  2. Read conflict markers to understand both sides' intent
+  3. Manually resolve (keep correct code, reject incompatible changes)
+  4. git add <resolved-files>
+  5. git rebase --continue
+  6. Repeat until rebase completes
+```
+
+##### Test Failure Handling
+
+```
+When tests fail:
+  1. Run: npm test
+  2. Analyze error messages - identify root cause
+  3. Fix the bug in your code
+  4. Re-run tests until all pass
+  5. Commit fix: git commit -m "fix: ..."
+```
+
+**Critical Rule**: Never give up. When rebase or tests fail, you MUST resolve before proceeding. Do not mark task as failed to bypass issues.
+
+##### Conflict Prevention Strategies
+
+- **Assign clear file ownership**: Different worktrees should modify different modules when possible
+- **Coordinate before starting**: Check dev-tasks.json to understand what others are working on
+- **Communicate intent**: If you must modify shared files (e.g., AGENTS.md, shared types), coordinate with other agents
+
+##### Worktree Cleanup Best Practices
+
+> **Note**: The `worktree-cleanup` skill is now installed globally. Use it for automated cleanup.
+
+- **Clean up immediately** after task completion to avoid stale worktrees
+- **Never leave uncommitted changes** in worktrees - always commit before cleanup
+- **Use `--force` when needed** - safe if all changes were committed
+- **Verify with `git worktree list`** - confirm only main worktree remains
+- **If session crashes** - manually clean up in next session using the commands above
+
+---
+
+## Task Lifecycle (Automated)
+
+This section describes the automated task lifecycle for AI agents. When properly configured, the agent can automatically pick up tasks, implement them in isolated workspaces, commit changes, and merge to main.
+
+### Task Data Structure (`data/dev-tasks.json`)
+
+Create `data/dev-tasks.json` in project root to manage tasks:
+
+```json
+[
+  {
+    "id": "task-001",
+    "title": "Add user profile feature",
+    "description": "Implement user profile page with avatar upload",
+    "status": "pending",
+    "priority": "high",
+    "assignee": "agent",
+    "createdAt": "2026-02-01T00:00:00Z"
+  }
+]
+```
+
+### Workflow Steps
+
+#### Step 1: Pick Up Task
+
+Atomic operation - read from `data/dev-tasks.json` and select a task with `status: "pending"`. Mark it as `in_progress` before starting.
+
+#### Step 2: Create Isolated Workspace
+
+Follow the worktree setup instructions in **Section 8: Parallel Development with Worktrees** above. Each task gets its own isolated Git worktree with dedicated branch and port.
+
+#### Step 3: Implement Feature
+
+In the isolated worktree:
+
+- Create `todo.md` for task breakdown
+- Implement the feature following TDD approach
+- Run tests locally before proceeding
+
+#### Step 4: Commit Changes
+
+```bash
+git add .
+git commit -m "<type>(<scope>): <subject>"
+```
+
+Follow [Conventional Commits](#git-commit-guidelines) format.
+
+#### Step 5: Merge + Test
+
+```bash
+# Fetch and merge latest main
+git fetch origin
+git merge origin/main
+
+# Run tests
+npm test
+
+# If any step fails, rollback to Step 3 and fix
+```
+
+#### Step 6: Auto-Merge to Main
+
+```bash
+# Rebase onto main
+git fetch origin main
+git rebase origin/main
+
+# If rebase fails: resolve conflicts, then continue
+# If rebase succeeds: merge to main
+git merge main task-xxx
+git push origin main
+
+# If any step fails: rollback to Step 5
+```
+
+#### Step 7: Mark Complete
+
+**CRITICAL**: Update `data/dev-tasks.json` to mark task as `completed` BEFORE cleanup. This prevents task status loss if process is killed.
+
+```json
+{
+  "id": "task-xxx",
+  "status": "completed",
+  "completedAt": "2026-02-19T00:00:00Z"
+}
+```
+
+#### Step 8: Cleanup
+
+```bash
+# Check for uncommitted changes first
+git status
+
+# If there are uncommitted changes, either commit or force remove
+git worktree remove --force ../fatebook-worktrees/task-xxx
+
+# Remove local branch
+git branch -D task/xxx
+
+# Delete remote task branch
+git push origin --delete task/xxx
+```
+
+> **Tip**: Use the `worktree-cleanup` skill for automated cleanup (installed globally).
+
+**Manual Cleanup Commands (backup):**
+
+```bash
+# Check for uncommitted changes first
+git status
+
+# If there are uncommitted changes, either commit or force remove
+git worktree remove --force ../fatebook-worktrees/task-xxx
+
+# Remove local branch
+git branch -D task/xxx
+
+# Delete remote task branch
+git push origin --delete task/xxx
+```
+
+**Important Cleanup Notes:**
+
+- **Always cleanup after task completion** - Stale worktrees cause confusion and potential conflicts
+- **Use `--force` if needed** - If worktree has untracked files, force remove is safe since changes were committed
+- **Verify cleanup** - Run `git worktree list` to confirm only main worktree remains
+- **Session interrupted?** - If OpenCode session ends unexpectedly, manually cleanup in next session
+
+#### Step 9: Experience Accumulation (Optional)
+
+Record lessons learned in `progress.txt`:
+
+```markdown
+## Session: [Date/Time]
+
+### Completed
+
+- [Task description]
+
+### Key Decisions
+
+- Decision: [What was decided]
+- Rationale: [Why]
+
+### Lessons Learned
+
+- [Lesson 1]
+```
+
+This step is optional - if the process is killed, task status in `dev-tasks.json` is preserved.
 
 ---
 
@@ -358,6 +673,61 @@ Suggestions should include:
 
 - Commit message in the above format
 - If multiple types of changes, provide multiple commit message suggestions
+
+### Atomic Commits Principle
+
+**Encourage small, atomic commits after each successful fix or implementation step.** This principle helps with:
+
+- **Rollback safety**: Easy to revert specific changes without affecting others
+- **Quality tracking**: Each commit represents a verified, working state
+- **Code review**: Reviewers can focus on one logical change at a time
+- **Debugging**: `git bisect` becomes much more effective
+
+#### What Makes a Commit Atomic
+
+An atomic commit should be:
+
+1. **Focused** - One logical change per commit (e.g., "fix login bug" NOT "fix login and update styles")
+2. **Complete** - The change is fully implemented, not half-done
+3. **Buildable** - All tests pass after the commit
+4. **Independent** - Can be understood without other commits
+
+#### When to Commit
+
+Commit after each successful:
+
+- Bug fix (even a small one)
+- Small feature implementation
+- Refactoring that improves code
+- Adding a test case
+- Documentation update
+
+#### Examples
+
+```bash
+# Good - Atomic commits
+git commit -m "fix(auth): resolve null pointer in token validation"
+git commit -m "feat(ui): add loading spinner to submit button"
+git commit -m "test(api): add unit test for question router"
+git commit -m "docs(readme): update installation instructions"
+
+# Bad - Non-atomic commits
+git commit -m "fix various bugs"           # Too vague, multiple fixes
+git commit -m "wip"                         # Work in progress
+git commit -m "update"                     # What was updated?
+git commit -m "fix and refactor"           # Mixed concerns
+```
+
+#### Workflow Integration
+
+During task implementation:
+
+1. Complete a small, working change
+2. Run tests to verify
+3. Commit immediately with descriptive message
+4. Continue to next step
+
+If you make a mistake later, you can always use `git revert` or `git reset` to fix it.
 
 ---
 
